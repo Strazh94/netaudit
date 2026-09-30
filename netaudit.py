@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-netaudit.py — лёгкий сканер портов и аудит безопасности (только стандартная библиотека).
+netaudit.py — lightweight port scanner and security audit (standard library only).
 
-Возможности:
-  * сканирование подсети (CIDR) или одиночного IP на указанные порты
-    (по умолчанию 22, 80, 443, 5432) через обычный connect-scan;
-  * определение служб по баннерам: SSH, HTTP(S), PostgreSQL;
-  * сверка версий/баннеров с локальной базой уязвимостей (vulnbase.json) —
-    только сопоставление, никакой эксплуатации;
-  * проверка TLS-сертификатов и версий TLS;
-  * опциональная (флаг --check-creds) ОГРАНИЧЕННАЯ проверка дефолтных паролей:
-    - HTTP Basic Auth (stdlib, не более 5 попыток на цель);
-    - PostgreSQL (собственная реализация протокола на socket, не более 5 попыток);
-    - SSH — только если установлен paramiko (иначе честный [skip]).
+Features:
+  * scanning a subnet (CIDR) or a single IP on the specified ports
+    (defaults: 22, 80, 443, 5432) using a plain connect-scan;
+  * service detection from banners: SSH, HTTP(S), PostgreSQL;
+  * matching versions/banners against a local vulnerability database (vulnbase.json) —
+    matching only, no exploitation;
+  * TLS certificate and TLS version checks;
+  * optional (flag --check-creds) LIMITED default-password check:
+    - HTTP Basic Auth (stdlib, at most 5 attempts per target);
+    - PostgreSQL (own protocol implementation over sockets, at most 5 attempts);
+    - SSH — only if paramiko is installed (otherwise an honest [skip]).
 
-Используйте ТОЛЬКО в сетях, на которые у вас есть явное разрешение.
+Use ONLY on networks you have explicit permission to audit.
 
-Коды возврата:
-  0 — проблем не найдено
-  1 — найдены проблемы
-  2 — ошибка запуска/аргументов
+Exit codes:
+  0 — no problems found
+  1 — problems found
+  2 — startup/arguments error
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ VERSION = "1.0"
 DEFAULT_PORTS = [22, 80, 443, 5432]
 SERVICE_BY_PORT = {22: "ssh", 80: "http", 443: "https", 5432: "postgres"}
 
-# Мини-словарь для проверки дефолтных учёток (только по --check-creds).
+# Mini dictionary for default-credential checks (only with --check-creds).
 CREDS = [
     ("admin", "admin"),
     ("admin", "password"),
@@ -57,20 +57,20 @@ CREDS = [
     ("test", "test"),
     ("admin", "123456"),
 ]
-MAX_CREDS_PER_TARGET = 5          # жёсткий лимит попыток на цель
+MAX_CREDS_PER_TARGET = 5          # hard limit of attempts per target
 HTTP_AUTH_PATHS = ["/", "/admin/", "/manager/html"]
 
 SEV_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 DISCLAIMER = """
-[!] СКАНИРОВАНИЕ СЕТЕЙ — ТОЛЬКО ПО РАЗРЕШЕНИЮ ВЛАДЕЛЬЦА.
-    Инструмент предназначен для аудита СВОИХ сетей/систем.
-    Неавторизованное сканирование чужих сетей незаконно.
+[!] NETWORK SCANNING — ONLY WITH THE OWNER'S PERMISSION.
+    The tool is intended for auditing YOUR OWN networks/systems.
+    Unauthorized scanning of other people's networks is illegal.
 """
 
 
 # ---------------------------------------------------------------------------
-# Общие утилиты
+# Common utilities
 # ---------------------------------------------------------------------------
 
 def parse_ports(text: str) -> list[int]:
@@ -87,7 +87,7 @@ def parse_ports(text: str) -> list[int]:
             ports.add(int(part))
     for p in ports:
         if not 1 <= p <= 65535:
-            raise ValueError(f"неверный порт: {p}")
+            raise ValueError(f"invalid port: {p}")
     return sorted(ports)
 
 
@@ -96,7 +96,7 @@ def version_tokens(v: str) -> tuple[int, ...]:
 
 
 def version_below(a: str, b: str) -> bool:
-    """True, если версия a строго меньше b."""
+    """True if version a is strictly less than b."""
     ta, tb = version_tokens(a), version_tokens(b)
     n = max(len(ta), len(tb))
     ta += (0,) * (n - len(ta))
@@ -119,11 +119,11 @@ def finding(severity: str, title: str, detail: str = "", cve: list | None = None
 
 
 # ---------------------------------------------------------------------------
-# Захват баннеров
+# Banner grabbing
 # ---------------------------------------------------------------------------
 
 def do_http(sock: socket.socket, method: str, host: str, path: str = "/") -> tuple[str, dict]:
-    """Отправляет простой запрос HTTP/1.0 и возвращает (статус-строка, заголовки)."""
+    """Sends a simple HTTP/1.0 request and returns (status line, headers)."""
     req = (
         f"{method} {path} HTTP/1.0\r\n"
         f"Host: {host}\r\n"
@@ -165,10 +165,10 @@ def grab_ssh(sock: socket.socket) -> str:
 
 def tls_handshake(raw: socket.socket, host: str, timeout: float):
     """
-    Пытается поднять TLS. Возвращает (tls_sock, findings, verified).
-    1) с проверкой цепочки доверия — если ок, разбираем сертификат;
-    2) при ошибке доверия — повторно без проверки, чтобы дочитать баннер,
-       и фиксируем проблему с сертификатом.
+    Tries to establish TLS. Returns (tls_sock, findings, verified).
+    1) with chain-of-trust verification — if OK, parse the certificate;
+    2) on a trust error — retry without verification to finish reading the
+       banner, and record the certificate problem.
     """
     findings: list[dict] = []
 
@@ -181,10 +181,10 @@ def tls_handshake(raw: socket.socket, host: str, timeout: float):
             ctx.verify_mode = ssl.CERT_NONE
         return ctx
 
-    # 1) с проверкой
+    # 1) with verification
     try:
         ctx = make_ctx(True)
-        ctx.check_hostname = False  # проверяем цепочку, имя — отдельно ниже
+        ctx.check_hostname = False  # we check the chain here; hostname separately below
         tls = ctx.wrap_socket(raw, server_hostname=host)
         tls.settimeout(timeout)
         cert = tls.getpeercert() or {}
@@ -195,23 +195,23 @@ def tls_handshake(raw: socket.socket, host: str, timeout: float):
                 days = (exp - datetime.utcnow()).days
                 if days < 0:
                     findings.append(finding(
-                        "high", "TLS: сертификат просрочен",
+                        "high", "TLS: certificate expired",
                         f"notAfter={not_after}"))
                 elif days <= 30:
                     findings.append(finding(
-                        "medium", "TLS: сертификат скоро истекает",
-                        f"осталось {days} дн., notAfter={not_after}"))
+                        "medium", "TLS: certificate expires soon",
+                        f"{days} day(s) left, notAfter={not_after}"))
             except ValueError:
                 pass
         return tls, findings, True
     except ssl.SSLCertVerificationError as e:
         findings.append(finding(
-            "high", "TLS: сертификат не проходит проверку доверия",
+            "high", "TLS: certificate fails trust verification",
             e.verify_message or str(e)))
     except (ssl.SSLError, OSError, socket.timeout):
         pass
 
-    # 2) без проверки (чтобы получить баннер/версию TLS)
+    # 2) without verification (to get the banner / TLS version)
     try:
         tls = ctx_off = make_ctx(False)
         tls = ctx_off.wrap_socket(raw, server_hostname=host)
@@ -226,8 +226,8 @@ def tls_findings(tls: ssl.SSLSocket) -> list[dict]:
     ver = tls.version() or ""
     if ver in ("TLSv1", "TLSv1.1", ""):
         out.append(finding(
-            "high", f"TLS: устаревшая/неопределённая версия протокола ({ver or 'unknown'})",
-            "используйте TLS 1.2+"))
+            "high", f"TLS: outdated/unknown protocol version ({ver or 'unknown'})",
+            "use TLS 1.2+"))
     return out
 
 
@@ -254,14 +254,14 @@ def grab_https(raw: socket.socket, host: str, timeout: float):
 
 
 PG_AUTH = {
-    0: ("trust", "критично", "critical",
-        "PostgreSQL: Trust-авторизация — вход БЕЗ пароля"),
-    3: ("cleartext", "открытый текст", "medium",
-        "PostgreSQL: пароль передаётся открытым текстом (cleartext auth)"),
-    5: ("md5", "md5-хеш", "medium",
-        "PostgreSQL: устаревенная md5-аутентификация (рекомендуется SCRAM)"),
+    0: ("trust", "trust auth", "critical",
+        "PostgreSQL: Trust authentication — login WITHOUT a password"),
+    3: ("cleartext", "cleartext", "medium",
+        "PostgreSQL: password sent in cleartext (cleartext auth)"),
+    5: ("md5", "md5 hash", "medium",
+        "PostgreSQL: legacy md5 authentication (SCRAM recommended)"),
     10: ("scram-sha-256", "scram", "info",
-         "PostgreSQL: SCRAM-SHA-256 (норма)"),
+         "PostgreSQL: SCRAM-SHA-256 (fine)"),
 }
 
 
@@ -304,8 +304,8 @@ def pg_error_fields(body: bytes) -> dict:
 
 def grab_postgres(sock: socket.socket):
     """
-    Определяет метод аутентификации PostgreSQL, не отправляя ни одного пароля.
-    Возвращает (баннер, код_аутентификации, findings).
+    Detects the PostgreSQL authentication method without sending any password.
+    Returns (banner, auth_code, findings).
     """
     pg_startup(sock, user="postgres")
     findings: list[dict] = []
@@ -316,7 +316,7 @@ def grab_postgres(sock: socket.socket):
         if typ == b"R" and len(body) >= 4:
             code = struct.unpack("!i", body[:4])[0]
             name, _h, sev, title = PG_AUTH.get(code, (f"code{code}", "?", "info", ""))
-            # нормальное состояние (SCRAM) — просто баннер, не «находка»
+            # normal state (SCRAM) — just a banner, not a "finding"
             if title and sev != "info":
                 findings.append(finding(sev, title, f"auth method = {name}"))
             return f"PostgreSQL (auth: {name})", code, findings
@@ -325,7 +325,7 @@ def grab_postgres(sock: socket.socket):
             msg = f.get("M", "")
             sev = "medium" if code_requires_attention(f) else "info"
             banner = f"PostgreSQL (error: {msg})" if msg else "PostgreSQL (error)"
-            findings.append(finding(sev, "PostgreSQL: ошибка при подключении", msg))
+            findings.append(finding(sev, "PostgreSQL: connection error", msg))
             return banner, None, findings
         if typ in (b"Z", b"S", b"K"):
             continue
@@ -333,13 +333,13 @@ def grab_postgres(sock: socket.socket):
 
 
 def code_requires_attention(fields: dict) -> bool:
-    # например: "no pg_hba.conf entry" — потенциально слабая конфигурация
+    # e.g. "no pg_hba.conf entry" — potentially weak configuration
     m = fields.get("M", "").lower()
     return "pg_hba" in m or "trust" in m
 
 
 # ---------------------------------------------------------------------------
-# Проверка порта
+# Port probing
 # ---------------------------------------------------------------------------
 
 def probe_port(ip: str, port: int, timeout: float) -> dict | None:
@@ -368,7 +368,7 @@ def probe_port(ip: str, port: int, timeout: float) -> dict | None:
             banner, fnd, _headers = grab_https(raw, ip, timeout)
             info["banner"] = banner
             info["findings"].extend(fnd)
-            raw = None  # сокет уже закрыт внутри grab_https
+            raw = None  # socket already closed inside grab_https
         elif service == "postgres":
             banner, _code, fnd = grab_postgres(raw)
             info["banner"] = banner
@@ -377,7 +377,7 @@ def probe_port(ip: str, port: int, timeout: float) -> dict | None:
             info.update(probe_unknown(raw, ip, timeout))
     except (OSError, ssl.SSLError, socket.timeout):
         if not info["banner"]:
-            info["banner"] = "(нет ответа)"
+            info["banner"] = "(no response)"
     finally:
         if raw is not None:
             try:
@@ -395,11 +395,11 @@ def describe_http(status: str, headers: dict) -> str:
         parts.append(f"Server: {headers['server']}")
     if headers.get("x-powered-by"):
         parts.append(f"X-Powered-By: {headers['x-powered-by']}")
-    return " | ".join(parts) or "(нет ответа)"
+    return " | ".join(parts) or "(no response)"
 
 
 def probe_unknown(sock: socket.socket, ip: str, timeout: float) -> dict:
-    """Авто-детект: сначала ждём баннер, иначе пробуем HTTP."""
+    """Auto-detect: wait for a banner first, otherwise try HTTP."""
     sock.settimeout(min(timeout, 0.7))
     peek = b""
     try:
@@ -419,7 +419,7 @@ def probe_unknown(sock: socket.socket, ip: str, timeout: float) -> dict:
     status, headers = do_http(sock, "HEAD", ip)
     if status.startswith("HTTP/"):
         return {"service": "http", "banner": describe_http(status, headers)}
-    return {"service": "unknown", "banner": "(нет ответа)"}
+    return {"service": "unknown", "banner": "(no response)"}
 
 
 def extract_version(banner: str, service: str) -> str | None:
@@ -430,7 +430,7 @@ def extract_version(banner: str, service: str) -> str | None:
         if m:
             return m.group(m.lastindex)
     if service in ("http", "https"):
-        # берём версию из Server:/X-Powered-by:, а не из строки статуса HTTP/1.0
+        # take the version from Server:/X-Powered-by:, not from the HTTP/1.0 status line
         for part in banner.split("|"):
             part = part.strip()
             if part.lower().startswith(("server:", "x-powered-by:")):
@@ -442,7 +442,7 @@ def extract_version(banner: str, service: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# База уязвимостей
+# Vulnerability database
 # ---------------------------------------------------------------------------
 
 def load_vulnbase(path: str) -> list[dict]:
@@ -451,15 +451,15 @@ def load_vulnbase(path: str) -> list[dict]:
             data = json.load(fh)
         return data.get("rules", [])
     except FileNotFoundError:
-        print(f"[!] База уязвимостей '{path}' не найдена — сверка версий отключена.")
+        print(f"[!] Vulnerability database '{path}' not found — version matching disabled.")
         return []
     except (json.JSONDecodeError, OSError) as e:
-        print(f"[!] Не удалось прочитать базу уязвимостей: {e}")
+        print(f"[!] Failed to read the vulnerability database: {e}")
         return []
 
 
 def match_vulns(service: str, text: str, rules: list[dict]) -> list[dict]:
-    """Сверяет баннер/версию с правилами. Только сопоставление, без эксплуатации."""
+    """Matches banner/version against the rules. Matching only, no exploitation."""
     if not text:
         return []
     out: list[dict] = []
@@ -472,22 +472,22 @@ def match_vulns(service: str, text: str, rules: list[dict]) -> list[dict]:
             continue
         ver = m.group(r.get("group", 1)) if m.groups() else ""
         vf, vb = r.get("vulnerable_from"), r.get("vulnerable_below")
-        # версия вне диапазона уязвимости — не считаем проблемой
+        # version outside the vulnerable range — not counted as a problem
         if vf and version_below(ver, vf):
             continue
         if vb and not version_below(ver, vb):
             continue
         out.append(finding(
             r.get("severity", "medium"),
-            r.get("title", "Совпадение с базой уязвимостей"),
-            (f"версия {ver}: " if ver else "") + r.get("advisory", ""),
+            r.get("title", "Match in the vulnerability database"),
+            (f"version {ver}: " if ver else "") + r.get("advisory", ""),
             r.get("cve", []),
         ))
     return out
 
 
 # ---------------------------------------------------------------------------
-# Проверка дефолтных паролей (только по --check-creds, с жёстким лимитом)
+# Default password checks (only with --check-creds, hard attempt limit)
 # ---------------------------------------------------------------------------
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -527,7 +527,7 @@ def check_http_creds(ip: str, port: int, use_tls: bool, timeout: float) -> dict:
     result = {"supported": True, "attempts": 0, "success": False,
               "credential": None, "detail": ""}
 
-    # ищем путь с 401 + Basic
+    # look for a path returning 401 + Basic
     target_path = None
     for path in HTTP_AUTH_PATHS:
         code = http_open(ip, port, use_tls, path, None, timeout)
@@ -535,7 +535,7 @@ def check_http_creds(ip: str, port: int, use_tls: bool, timeout: float) -> dict:
             target_path = path
             break
     if target_path is None:
-        result["detail"] = "область с HTTP Basic Auth не найдена"
+        result["detail"] = "no HTTP Basic Auth area found"
         return result
 
     for user, pw in CREDS[:MAX_CREDS_PER_TARGET]:
@@ -543,17 +543,17 @@ def check_http_creds(ip: str, port: int, use_tls: bool, timeout: float) -> dict:
         code = http_open(ip, port, use_tls, target_path, (user, pw), timeout)
         if code == 200:
             result.update(success=True, credential=f"{user}:{pw}",
-                          detail=f"успешный вход на {target_path}")
+                          detail=f"successful login on {target_path}")
             return result
 
-    result["detail"] = f"дефолтные пароли не подошли ({target_path})"
+    result["detail"] = f"default passwords did not work ({target_path})"
     return result
 
 
 # --- PostgreSQL ------------------------------------------------------------
 
 def pg_login(ip: str, port: int, timeout: float, user: str, password: str) -> dict:
-    """Полный login PostgreSQL. Возвращает status/detail/version."""
+    """Full PostgreSQL login. Returns status/detail/version."""
     out = {"status": "fail", "detail": "", "version": None}
     try:
         sock = socket.create_connection((ip, port), timeout=timeout)
@@ -568,13 +568,13 @@ def pg_login(ip: str, port: int, timeout: float, user: str, password: str) -> di
         for _ in range(30):
             typ, body = pg_recv_msg(sock)
             if typ is None:
-                out["detail"] = "соединение закрыто"
+                out["detail"] = "connection closed"
                 return out
             if typ == b"R" and len(body) >= 4:
                 code = struct.unpack("!i", body[:4])[0]
                 if code == 0:
                     out["status"] = "success"
-                    out["detail"] = "trust-авторизация (пароль не потребовался)"
+                    out["detail"] = "trust authentication (no password required)"
                 elif code == 3:
                     pw = password.encode() + b"\x00"
                     sock.sendall(b"p" + struct.pack("!i", 4 + len(pw)) + pw)
@@ -586,11 +586,11 @@ def pg_login(ip: str, port: int, timeout: float, user: str, password: str) -> di
                     sock.sendall(b"p" + struct.pack("!i", 4 + len(pw)) + pw)
                 elif code == 10:
                     out["status"] = "unsupported"
-                    out["detail"] = "SCRAM-SHA-256 не поддерживается (нужен stdlib-клиент)"
+                    out["detail"] = "SCRAM-SHA-256 not supported (stdlib client required)"
                     return out
                 else:
                     out["status"] = "unsupported"
-                    out["detail"] = f"метод аутентификации code={code}"
+                    out["detail"] = f"authentication method code={code}"
                     return out
             elif typ == b"S" and body:
                 k, i = _cstr(body, 0)
@@ -607,9 +607,9 @@ def pg_login(ip: str, port: int, timeout: float, user: str, password: str) -> di
             elif typ == b"Z":
                 if out["status"] == "success":
                     return out
-                out["detail"] = "готовness без авторизации"
+                out["detail"] = "readyForQuery without authentication"
                 return out
-        out["detail"] = "превышено число сообщений"
+        out["detail"] = "message limit exceeded"
         return out
     except (OSError, socket.timeout) as e:
         out["status"] = "error"
@@ -632,7 +632,7 @@ def check_postgres_creds(ip: str, port: int, timeout: float) -> dict:
             result["version"] = r["version"]
         if r["status"] == "success":
             result.update(success=True, credential=f"{user}:{pw}",
-                          detail=r["detail"] or "успешный вход")
+                          detail=r["detail"] or "successful login")
             return result
         if r["status"] == "unsupported":
             result["supported"] = False
@@ -641,7 +641,7 @@ def check_postgres_creds(ip: str, port: int, timeout: float) -> dict:
         if r["status"] == "error" and not result["detail"]:
             result["detail"] = r["detail"]
     if not result["detail"]:
-        result["detail"] = "дефолтные пароли не подошли"
+        result["detail"] = "default passwords did not work"
     return result
 
 
@@ -654,7 +654,7 @@ def check_ssh_creds(ip: str, port: int, timeout: float) -> dict:
         import paramiko  # type: ignore
     except ImportError:
         result["supported"] = False
-        result["detail"] = "paramiko не установлен — проверка SSH пропущена"
+        result["detail"] = "paramiko not installed — SSH check skipped"
         return result
 
     last_err = ""
@@ -669,21 +669,21 @@ def check_ssh_creds(ip: str, port: int, timeout: float) -> dict:
                            look_for_keys=False)
             client.close()
             result.update(success=True, credential=f"{user}:{pw}",
-                          detail="успешный вход")
+                          detail="successful login")
             return result
-        except Exception as e:  # noqa: BLE001 — любая ошибка авторизации
+        except Exception as e:  # noqa: BLE001 — any authorization error
             last_err = str(e)
         finally:
             try:
                 client.close()
             except Exception:
                 pass
-    result["detail"] = f"дефолтные пароли не подошли ({last_err[:120]})"
+    result["detail"] = f"default passwords did not work ({last_err[:120]})"
     return result
 
 
 # ---------------------------------------------------------------------------
-# Сканирование
+# Scanning
 # ---------------------------------------------------------------------------
 
 def resolve_hosts(network: str) -> list[str]:
@@ -691,7 +691,7 @@ def resolve_hosts(network: str) -> list[str]:
         net = ipaddress.ip_network(network, strict=False)
         return [str(h) for h in net.hosts()] or [str(net.network_address)]
     except ValueError:
-        # возможно, одиночный IP или хостнейм
+        # maybe a single IP or a hostname
         try:
             ipaddress.ip_address(network)
             return [network]
@@ -710,7 +710,7 @@ def run_scan(hosts: list[str], ports: list[int], timeout: float,
         for fut in as_completed(futures):
             done += 1
             if done % 200 == 0 or done == len(tasks):
-                print(f"\r[*] проверено {done}/{len(tasks)} соединений...",
+                print(f"\r[*] checked {done}/{len(tasks)} connections...",
                       end="", flush=True)
             try:
                 info = fut.result()
@@ -719,7 +719,7 @@ def run_scan(hosts: list[str], ports: list[int], timeout: float,
             if info:
                 info["ip"] = futures[fut][0]
                 results.append(info)
-    print("\r[*] сканирование завершено.                 ")
+    print("\r[*] scan complete.                          ")
     return results
 
 
@@ -743,7 +743,7 @@ def run_cred_checks(open_ports: list[dict], timeout: float, workers: int) -> Non
 
 
 # ---------------------------------------------------------------------------
-# Вывод
+# Output
 # ---------------------------------------------------------------------------
 
 def sev_rank(f: dict) -> int:
@@ -781,14 +781,14 @@ def print_details(scan_results: list[dict]) -> int:
         if cc and cc.get("success"):
             details.append((item, finding(
                 "critical",
-                "Дефолтный пароль работает!",
+                "Default password works!",
                 f"{item['service']}: {cc['credential']} ({cc.get('detail','')})")))
 
     if not details:
-        print("\n[OK] Проблем не найдено.")
+        print("\n[OK] No problems found.")
         return 0
 
-    print("\n=== Найденные проблемы ===")
+    print("\n=== Problems found ===")
     for item, f in sorted(details, key=lambda t: sev_rank(t[1])):
         cve = (" " + ", ".join(f["cve"])) if f["cve"] else ""
         print(f"[{f['severity'].upper():<8}] {item['ip']}:{item['port']}"
@@ -798,7 +798,7 @@ def print_details(scan_results: list[dict]) -> int:
         if f.get("severity", "info") != "info":
             total += 1
     if total == 0:
-        print("  (только информационные заметки, критичных проблем нет)")
+        print("  (informational notes only, no critical problems)")
     return total
 
 
@@ -851,27 +851,27 @@ def write_report(path: str, meta: dict, hosts_total: int,
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Сканер портов и аудит безопасности (только stdlib).",
-        epilog="Используйте только в сетях, на которые у вас есть разрешение.")
-    p.add_argument("network", help="CIDR (192.168.1.0/24), одиночный IP или хостнейм")
+        description="Port scanner and security audit (stdlib only).",
+        epilog="Use only on networks you have permission to scan.")
+    p.add_argument("network", help="CIDR (192.168.1.0/24), a single IP or a hostname")
     p.add_argument("--ports", default=",".join(map(str, DEFAULT_PORTS)),
-                   help="порты: '22,80,443' или диапазоны '8000-8010' "
-                        f"(по умолчанию {','.join(map(str, DEFAULT_PORTS))})")
+                   help="ports: '22,80,443' or ranges like '8000-8010' "
+                        f"(default {','.join(map(str, DEFAULT_PORTS))})")
     p.add_argument("--timeout", type=float, default=1.0,
-                   help="таймаут соединения, сек (по умолчанию 1.0)")
+                   help="connection timeout, seconds (default 1.0)")
     p.add_argument("--workers", type=int, default=100,
-                   help="число потоков (по умолчанию 100)")
+                   help="number of threads (default 100)")
     p.add_argument("--max-hosts", type=int, default=4096,
-                   help="максимум хостов в одной подсети (по умолчанию 4096)")
+                   help="maximum hosts in one subnet (default 4096)")
     p.add_argument("--out", default="report.json",
-                   help="куда сохранить JSON-отчёт (по умолчанию report.json)")
+                   help="where to save the JSON report (default report.json)")
     p.add_argument("--vulnbase", default=None,
-                   help="путь к базе уязвимостей (по умолчанию vulnbase.json "
-                        "рядом со скриптом)")
+                   help="path to the vulnerability database (default vulnbase.json "
+                        "next to the script)")
     p.add_argument("--check-creds", action="store_true",
-                   help="проверить дефолтные пароли (не более 5 попыток на цель)")
+                   help="check default passwords (at most 5 attempts per target)")
     p.add_argument("--yes", action="store_true",
-                   help="не спрашивать подтверждение для --check-creds")
+                   help="do not ask for confirmation for --check-creds")
     return p
 
 
@@ -879,12 +879,12 @@ def confirm_creds(auto_yes: bool) -> bool:
     if auto_yes:
         return True
     if not sys.stdin.isatty():
-        print("[!] Неинтерактивный режим: для --check-creds укажите --yes.")
+        print("[!] Non-interactive mode: pass --yes to use --check-creds.")
         return False
     print(DISCLAIMER)
-    print("[!] --check-creds выполняет попытки входа с дефолтными паролями.")
+    print("[!] --check-creds performs login attempts with default passwords.")
     try:
-        ans = input("    Подтвердите, что у вас есть разрешение: [y/N] ")
+        ans = input("    Confirm that you have permission: [y/N] ")
     except (EOFError, KeyboardInterrupt):
         print()
         return False
@@ -892,7 +892,7 @@ def confirm_creds(auto_yes: bool) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    # Windows: консоль по умолчанию не в UTF-8 — исправляем вывод кириллицы
+    # Windows: console is not UTF-8 by default — fix Cyrillic output
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -904,27 +904,27 @@ def main(argv: list[str] | None = None) -> int:
     try:
         ports = parse_ports(args.ports)
     except (ValueError, TypeError) as e:
-        print(f"[!] Неверный список портов: {e}", file=sys.stderr)
+        print(f"[!] Invalid port list: {e}", file=sys.stderr)
         return 2
 
     try:
         hosts = resolve_hosts(args.network)
     except (socket.gaierror, OSError) as e:
-        print(f"[!] Не удалось разрешить адрес: {e}", file=sys.stderr)
+        print(f"[!] Failed to resolve address: {e}", file=sys.stderr)
         return 2
 
     if not hosts:
-        print("[!] Пустая подсеть.", file=sys.stderr)
+        print("[!] Empty subnet.", file=sys.stderr)
         return 2
     if len(hosts) > args.max_hosts:
-        print(f"[!] Подсеть слишком велика: {len(hosts)} хостов "
-              f"(лимит --max-hosts {args.max_hosts}).", file=sys.stderr)
+        print(f"[!] Subnet too large: {len(hosts)} hosts "
+              f"(--max-hosts limit {args.max_hosts}).", file=sys.stderr)
         return 2
 
     do_creds = False
     if args.check_creds:
         if not confirm_creds(args.yes):
-            print("[!] Проверка паролей отменена.", file=sys.stderr)
+            print("[!] Password check cancelled.", file=sys.stderr)
             return 2
         do_creds = True
 
@@ -935,26 +935,26 @@ def main(argv: list[str] | None = None) -> int:
     rules = load_vulnbase(vulnbase_path)
 
     print(DISCLAIMER)
-    print(f"[i] netaudit {VERSION} | цель: {args.network} | хостов: {len(hosts)} "
-          f"| портов: {','.join(map(str, ports))} | таймаут: {args.timeout}s")
+    print(f"[i] netaudit {VERSION} | target: {args.network} | hosts: {len(hosts)} "
+          f"| ports: {','.join(map(str, ports))} | timeout: {args.timeout}s")
 
     started = time.time()
     try:
         scan_results = run_scan(hosts, ports, args.timeout, args.workers)
     except KeyboardInterrupt:
-        print("\n[!] Прервано пользователем.", file=sys.stderr)
+        print("\n[!] Interrupted by user.", file=sys.stderr)
         return 130
 
     if do_creds and scan_results:
-        print(f"[*] проверка дефолтных паролей на {len(scan_results)} открытых портах "
-              f"(не более {MAX_CREDS_PER_TARGET} попыток на цель)...")
+        print(f"[*] checking default passwords on {len(scan_results)} open ports "
+              f"(at most {MAX_CREDS_PER_TARGET} attempts per target)...")
         try:
             run_cred_checks(scan_results, args.timeout, min(args.workers, 50))
         except KeyboardInterrupt:
-            print("\n[!] Прервано пользователем.", file=sys.stderr)
+            print("\n[!] Interrupted by user.", file=sys.stderr)
             return 130
 
-    # сверка с базой уязвимостей
+    # match against the vulnerability database
     for item in scan_results:
         svc = item["service"]
         if svc in ("ssh", "http", "https"):
@@ -968,14 +968,14 @@ def main(argv: list[str] | None = None) -> int:
         item["findings"].sort(key=sev_rank)
 
     if not scan_results:
-        print("\n[!] Открытых портов не найдено (все хосты недоступны?).")
+        print("\n[!] No open ports found (are all hosts down?).")
 
     print_table(scan_results)
     problems = print_details(scan_results)
 
     up_count = len({r["ip"] for r in scan_results})
-    print(f"\n[i] Итого: хостов в сети {len(hosts)}, с открытыми портами {up_count}, "
-          f"открытых портов {len(scan_results)}, проблем {problems}")
+    print(f"\n[i] Total: hosts on the network {len(hosts)}, with open ports {up_count}, "
+          f"open ports {len(scan_results)}, problems {problems}")
 
     meta = {
         "tool": "netaudit",
@@ -992,9 +992,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     try:
         write_report(args.out, meta, len(hosts), scan_results, problems)
-        print(f"[i] Отчёт сохранён: {args.out}")
+        print(f"[i] Report saved: {args.out}")
     except OSError as e:
-        print(f"[!] Не удалось сохранить отчёт: {e}", file=sys.stderr)
+        print(f"[!] Failed to save the report: {e}", file=sys.stderr)
         return 2
 
     return 1 if problems else 0

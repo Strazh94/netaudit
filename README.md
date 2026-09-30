@@ -1,77 +1,77 @@
 # netaudit
 
-Лёгкий сканер портов и аудит безопасности на чистом Python (только стандартная библиотека).
+Lightweight port scanner and security audit in pure Python (standard library only).
 
-Сканирует заданную подсеть, определяет открытые порты (**80, 443, 22, 5432** по умолчанию), снимает баннеры служб и сверяет их с локальной базой известных уязвимостей. Опционально проверяет, не подходят ли к службам дефолтные пароли — с жёстким лимитом попыток.
+Scans a given subnet, detects open ports (**80, 443, 22, 5432** by default), grabs service banners and matches them against a local database of known vulnerabilities. Optionally checks whether services accept default passwords — with a hard attempt limit.
 
 > [!WARNING]
-> Инструмент предназначен **только для аудита сетей, на которые у вас есть явное разрешение**.
-> Неавторизованное сканирование чужих сетей незаконно.
+> The tool is intended **only for auditing networks you have explicit permission for**.
+> Unauthorized scanning of other people's networks is illegal.
 
-## Возможности
+## Features
 
-- **Connect-scan подсети** — CIDR (`192.168.1.0/24`), одиночный IP или хостнейм; пул потоков, таймауты, лимит размера подсети. Права администратора не нужны (никаких raw/SYN-сокетов).
-- **Определение служб по баннерам**: SSH, HTTP(S), PostgreSQL, плюс авто-детект по баннеру для нестандартных портов.
-- **Сверка с базой уязвимостей** (`vulnbase.json`): регулярные выражения + сравнение версий → известные CVE. Только сопоставление, никакой эксплуатации.
-- **Проверка TLS**: просроченные/недоверенные сертификаты, устаревшие TLS 1.0/1.1.
-- **Ограниченная проверка дефолтных паролей** (`--check-creds`, не более 5 попыток на цель):
-  - HTTP Basic Auth — на чистом stdlib;
-  - PostgreSQL — собственная реализация протокола на сокетах (cleartext / MD5 / Trust; SCRAM-SHA-256 честно помечается как неподдерживаемый);
-  - SSH — только при установленном `paramiko`, иначе честный `[skip]`.
-- **Отчёт**: таблица в консоли + machine-readable `report.json`.
+- **Subnet connect-scan** — CIDR (`192.168.1.0/24`), a single IP or a hostname; thread pool, timeouts, subnet size limit. No administrator privileges required (no raw/SYN sockets).
+- **Service detection from banners**: SSH, HTTP(S), PostgreSQL, plus banner-based auto-detect for non-standard ports.
+- **Vulnerability database matching** (`vulnbase.json`): regular expressions + version comparison → known CVEs. Matching only, no exploitation.
+- **TLS checks**: expired/untrusted certificates, outdated TLS 1.0/1.1.
+- **Limited default password check** (`--check-creds`, at most 5 attempts per target):
+  - HTTP Basic Auth — on pure stdlib;
+  - PostgreSQL — own protocol implementation over sockets (cleartext / MD5 / Trust; SCRAM-SHA-256 is honestly reported as unsupported);
+  - SSH — only when `paramiko` is installed, otherwise an honest `[skip]`.
+- **Report**: console table + machine-readable `report.json`.
 
-## Установка и запуск
+## Installation and usage
 
-Требуется Python 3.10+. Никаких зависимостей для базового скана не нужно.
+Python 3.10+ is required. No dependencies are needed for a basic scan.
 
 ```bash
 git clone git@github.com:Strazh94/netaudit.git
 cd netaudit
 
-# базовое сканирование подсети
+# basic subnet scan
 python netaudit.py 192.168.1.0/24
 
-# свои порты, таймаут и отчёт
+# custom ports, timeout and report
 python netaudit.py 192.168.1.10 --ports 22,80,443,5432 --timeout 2 --out audit.json
 
-# + ограниченная проверка дефолтных паролей (с подтверждением)
+# + limited default password check (with confirmation)
 python netaudit.py 192.168.1.10 --check-creds
-python netaudit.py 192.168.1.10 --check-creds --yes   # для cron/CI
+python netaudit.py 192.168.1.10 --check-creds --yes   # for cron/CI
 ```
 
-Опционально, только для проверки паролей на SSH:
+Optionally, only for SSH password checks:
 
 ```bash
 pip install paramiko
 ```
 
-## Параметры
+## Options
 
-| Параметр | По умолчанию | Описание |
+| Option | Default | Description |
 |---|---|---|
-| `network` | — | CIDR, одиночный IP или хостнейм |
-| `--ports` | `22,80,443,5432` | список портов и диапазонов: `22,80,8000-8010` |
-| `--timeout` | `1.0` | таймаут соединения, сек |
-| `--workers` | `100` | число потоков |
-| `--max-hosts` | `4096` | максимум хостов в подсети (защита от случайного скана) |
-| `--out` | `report.json` | путь для JSON-отчёта |
-| `--vulnbase` | `vulnbase.json` | путь к базе уязвимостей |
-| `--check-creds` | выкл. | проверить дефолтные пароли (≤5 попыток на цель) |
-| `--yes` | выкл. | не спрашивать подтверждение для `--check-creds` |
+| `network` | — | CIDR, a single IP or a hostname |
+| `--ports` | `22,80,443,5432` | list of ports and ranges: `22,80,8000-8010` |
+| `--timeout` | `1.0` | connection timeout, seconds |
+| `--workers` | `100` | number of threads |
+| `--max-hosts` | `4096` | maximum hosts in the subnet (protection against accidental scans) |
+| `--out` | `report.json` | path for the JSON report |
+| `--vulnbase` | `vulnbase.json` | path to the vulnerability database |
+| `--check-creds` | off | check default passwords (≤5 attempts per target) |
+| `--yes` | off | do not ask for confirmation for `--check-creds` |
 
-## Коды возврата
+## Exit codes
 
-| Код | Значение |
+| Code | Meaning |
 |---|---|
-| `0` | проблем не найдено |
-| `1` | найдены проблемы |
-| `2` | ошибка запуска/аргументов |
+| `0` | no problems found |
+| `1` | problems found |
+| `2` | startup/arguments error |
 
-Удобно для cron и CI: `python netaudit.py 10.0.0.0/24 || notify.sh`.
+Handy for cron and CI: `python netaudit.py 10.0.0.0/24 || notify.sh`.
 
-## Формат базы уязвимостей
+## Vulnerability database format
 
-`vulnbase.json` — обычный редактируемый JSON. Пример правила:
+`vulnbase.json` is a plain, human-editable JSON. Example rule:
 
 ```json
 {
@@ -82,17 +82,17 @@ pip install paramiko
   "severity": "critical",
   "title": "Apache HTTP Server: path traversal / RCE",
   "cve": ["CVE-2021-41773", "CVE-2021-42013"],
-  "advisory": "Срочно обновите Apache httpd до 2.4.51+."
+  "advisory": "Urgently update Apache httpd to 2.4.51+."
 }
 ```
 
-- `pattern` — регулярное выражение, группа по умолчанию `1` — версия;
-- `vulnerable_from` / `vulnerable_below` — диапазон уязвимости (границы: `from` включительно, `below` исключительно);
-- `service`: `ssh`, `http` (для HTTPS тоже), `postgres`, `*`.
+- `pattern` — regular expression, default capture group `1` is the version;
+- `vulnerable_from` / `vulnerable_below` — vulnerable range (bounds: `from` inclusive, `below` exclusive);
+- `service`: `ssh`, `http` (also used for HTTPS), `postgres`, `*`.
 
-Правила содержат **только описание проблемы и CVE** — никакого кода эксплуатации.
+Rules contain **only the problem description and CVEs** — no exploitation code.
 
-## Пример вывода
+## Sample output
 
 ```
 HOST             PORT   STATE  SERVICE    VERSION                  FINDINGS
@@ -100,20 +100,20 @@ HOST             PORT   STATE  SERVICE    VERSION                  FINDINGS
 192.168.1.10     22     open   ssh        7.4                      MEDIUMx2
 192.168.1.10     80     open   http       Apache 2.4.49            CRITICALx1, HIGHx1
 
-=== Найденные проблемы ===
+=== Problems found ===
 [CRITICAL] 192.168.1.10:80  Apache HTTP Server: path traversal / RCE CVE-2021-41773, CVE-2021-42013
-           -> версия 2.4.49: Срочно обновите Apache httpd до 2.4.51+.
-[CRITICAL] 192.168.1.10:80  Дефолтный пароль работает!
-           -> http: admin:admin (успешный вход на /)
+           -> version 2.4.49: Urgently update Apache httpd to 2.4.51+.
+[CRITICAL] 192.168.1.10:80  Default password works!
+           -> http: admin:admin (successful login on /)
 ```
 
-## Ограничения безопасности
+## Security limitations
 
-- только connect-scan — не нужны права администратора;
-- лимит хостов, лимит потоков, таймауты на все операции;
-- `--check-creds`: максимум 5 комбинаций на цель, явное подтверждение (или `--yes`), каждая попытка фиксируется в отчёте;
-- дисклеймер о необходимости разрешения печатается при каждом запуске.
+- connect-scan only — no administrator privileges required;
+- host limit, thread limit, timeouts on all operations;
+- `--check-creds`: at most 5 combinations per target, explicit confirmation (or `--yes`), every attempt is recorded in the report;
+- the permission disclaimer is printed on every run.
 
-## Лицензия
+## License
 
-MIT — см. [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

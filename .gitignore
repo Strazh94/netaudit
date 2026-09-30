@@ -1,15 +1,15 @@
-# Освободите место, если кэш мешает — стандартные игноры для Python
+# Free up space if the cache gets in the way — standard Python ignores
 __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
 venv/
 
-# Артефакты сканирования (отчёты могут содержать чувствительные данные сетей)
+# Scan artifacts (reports may contain sensitive network data)
 report*.json
 *.log
 
-# Редакторы / ОС
+# Editors / OS
 .vscode/
 .idea/
 .DS_Store

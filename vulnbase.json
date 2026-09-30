@@ -1,15 +1,15 @@
 {
   "updated": "2026-09-23",
-  "note": "Локальная база сигнатур для сверки баннеров/версий. Это НЕ эксплойты: скрипт только сообщает о совпадении. Обновляйте правила вручную.",
+  "note": "Local signature database for matching banners/versions. These are NOT exploits: the script only reports a match. Update the rules manually.",
   "rules": [
     {
       "service": "ssh",
       "pattern": "OpenSSH_([0-9]+(?:\\.[0-9]+)*)",
       "vulnerable_below": "8.0",
       "severity": "medium",
-      "title": "OpenSSH: устаревшая версия (enumeration пользователей)",
+      "title": "OpenSSH: outdated version (user enumeration)",
       "cve": ["CVE-2018-15473"],
-      "advisory": "Обновите OpenSSH до 8.0+."
+      "advisory": "Update OpenSSH to 8.0+."
     },
     {
       "service": "ssh",
@@ -18,16 +18,16 @@
       "severity": "medium",
       "title": "OpenSSH: Terrapin (prefix truncation)",
       "cve": ["CVE-2023-48795"],
-      "advisory": "Обновите OpenSSH до 9.6+/включите strict KEX."
+      "advisory": "Update OpenSSH to 9.6+/enable strict KEX."
     },
     {
       "service": "ssh",
       "pattern": "Dropbear_([0-9]+(?:\\.[0-9]+)*)",
       "vulnerable_below": "2020.81",
       "severity": "medium",
-      "title": "Dropbear SSH: устаревшая версия",
+      "title": "Dropbear SSH: outdated version",
       "cve": [],
-      "advisory": "Обновите Dropbear до актуальной версии."
+      "advisory": "Update Dropbear to a current version."
     },
     {
       "service": "http",
@@ -37,25 +37,25 @@
       "severity": "critical",
       "title": "Apache HTTP Server: path traversal / RCE",
       "cve": ["CVE-2021-41773", "CVE-2021-42013"],
-      "advisory": "Срочно обновите Apache httpd до 2.4.51+."
+      "advisory": "Urgently update Apache httpd to 2.4.51+."
     },
     {
       "service": "http",
       "pattern": "Apache/([0-9]+(?:\\.[0-9]+)*)",
       "vulnerable_below": "2.4.61",
       "severity": "high",
-      "title": "Apache HTTP Server: обход авторизации / утечки конфигурации (mod_rewrite)",
+      "title": "Apache HTTP Server: authorization bypass / configuration leaks (mod_rewrite)",
       "cve": ["CVE-2024-38474", "CVE-2024-38475", "CVE-2024-39573"],
-      "advisory": "Обновите Apache httpd до 2.4.61+."
+      "advisory": "Update Apache httpd to 2.4.61+."
     },
     {
       "service": "http",
       "pattern": "nginx/([0-9]+(?:\\.[0-9]+)*)",
       "vulnerable_below": "1.22.1",
       "severity": "high",
-      "title": "nginx: уязвимости модуля mp4",
+      "title": "nginx: mp4 module vulnerabilities",
       "cve": ["CVE-2022-41741", "CVE-2022-41742"],
-      "advisory": "Обновите nginx до 1.22.1+/1.23.1+."
+      "advisory": "Update nginx to 1.22.1+/1.23.1+."
     },
     {
       "service": "http",
@@ -63,45 +63,45 @@
       "vulnerable_from": "1.13.0",
       "vulnerable_below": "1.17.6",
       "severity": "medium",
-      "title": "nginx: request smuggling через error_page",
+      "title": "nginx: request smuggling via error_page",
       "cve": ["CVE-2019-20372"],
-      "advisory": "Обновите nginx до 1.17.6+."
+      "advisory": "Update nginx to 1.17.6+."
     },
     {
       "service": "http",
       "pattern": "PHP/([0-9]+(?:\\.[0-9]+)*)",
       "vulnerable_below": "7.4.33",
       "severity": "high",
-      "title": "PHP: ветка EOL, безопасности не патчатся",
+      "title": "PHP: EOL branch, no security patches",
       "cve": [],
-      "advisory": "Перейдите на поддерживаемую ветку PHP 8.1+."
+      "advisory": "Move to a supported PHP 8.1+ branch."
     },
     {
       "service": "http",
       "pattern": "Microsoft-IIS/([0-9]+(?:\\.[0-9]+)*)",
       "vulnerable_below": "10.0",
       "severity": "high",
-      "title": "IIS: устаревшая версия",
+      "title": "IIS: outdated version",
       "cve": [],
-      "advisory": "Обновите IIS/Windows до поддерживаемой версии."
+      "advisory": "Update IIS/Windows to a supported version."
     },
     {
       "service": "http",
       "pattern": "Python/([0-9]+(?:\\.[0-9]+)*)",
       "vulnerable_below": "3.11",
       "severity": "medium",
-      "title": "HTTP-сервер на устаревшем Python (стандартный модуль — не для прода)",
+      "title": "HTTP server on an outdated Python (stdlib module — not production-ready)",
       "cve": [],
-      "advisory": "Замените dev-сервер на промышленный (nginx/gunicorn и т.п.)."
+      "advisory": "Replace the dev server with a production one (nginx/gunicorn etc.)."
     },
     {
       "service": "postgres",
       "pattern": "([0-9]+\\.[0-9]+)",
       "vulnerable_below": "14",
       "severity": "high",
-      "title": "PostgreSQL: поддерживаемая ветка EOL",
+      "title": "PostgreSQL: supported branch is EOL",
       "cve": [],
-      "advisory": "Обновите PostgreSQL до поддерживаемой версии (14+)."
+      "advisory": "Update PostgreSQL to a supported version (14+)."
     }
   ]
 }
